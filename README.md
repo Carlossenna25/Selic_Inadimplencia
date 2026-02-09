@@ -13,7 +13,31 @@ A identificação é feita via **VAR** e **Funções Resposta ao Impulso (IRF)**
 - Banco Central do Brasil (SGS/BCB) — séries econômicas (ex.: Selic, inadimplência, etc.)
 - IBGE/SIDRA — indicadores complementares (quando aplicável)
 - Sistema de Informação de Crédito - SCR
-- https://dadosabertos.bcb.gov.br/dataset/scr_data/resource/529ce436-b070-48b8-99f2-7b07bca04ecf?inner_span=True
+
+## Dados (arquivos grandes)
+
+Este repositório **não versiona** as planilhas/dados brutos do SCR quando **> 100 MB** (limite prático do GitHub e para manter o repositório leve).
+
+Os dados foram obtidos a partir do conjunto **SCR.Data** do Banco Central do Brasil (BCB):
+
+- Catálogo de dados abertos (recurso SCR.Data):  
+  https://dadosabertos.bcb.gov.br/dataset/scr_data/resource/529ce436-b070-48b8-99f2-7b07bca04ecf?inner_span=True
+
+### Download dos arquivos mensais (Versão 1 do SCR.Data)
+
+Os arquivos `.ZIP` com os dados mensais podem ser baixados via:
+
+https://www.bcb.gov.br/pda/desig/planilha_{ANO}.zip
+
+Substituindo `{ANO}` pelo ano correspondente. Exemplo (2025):
+
+https://www.bcb.gov.br/pda/desig/planilha_2025.zip
+
+### Como usar neste projeto
+
+1. Baixe os arquivos `.ZIP` do(s) ano(s) necessário(s).
+2. Extraia/organize os dados em uma pasta local (ex.: `data/raw/`).
+3. Execute os scripts/notebooks do projeto para tratamento e construção das bases de análise.
 
 ## Como reproduzir
 ### Pré-requisitos
