@@ -1,5 +1,6 @@
 # Impacto da Selic na inadimplência (SFN vs SNCC)
 
+## 📌 Objetivo
 Relatório em **Quarto (R)** que estima o impacto de choques contracionistas na taxa **Selic** sobre a **inadimplência** do **Sistema Financeiro Nacional (SFN)** e do **Sistema Nacional de Crédito Cooperativo (SNCC)**, com dados mensais a partir de 2012.
 
 A identificação é feita via **VAR** e **Funções Resposta ao Impulso (IRF)** com **intervalos de confiança via bootstrap (1.000 repetições)**.
@@ -38,6 +39,30 @@ https://www.bcb.gov.br/pda/desig/planilha_2025.zip
 1. Baixe os arquivos `.ZIP` do(s) ano(s) necessário(s).
 2. Extraia/organize os dados em uma pasta local (ex.: `data/raw/`).
 3. Execute os scripts/notebooks do projeto para tratamento e construção das bases de análise.
+
+---
+
+## 📦 Metodologia
+- Modelos VAR estimados com dados mensais (a partir de 2012)
+- Identificação via choques exógenos na Selic
+- Funções Resposta ao Impulso (IRF)
+- Intervalos de confiança obtidos por **bootstrap (1.000 repetições)**
+- Testes de diagnóstico: autocorrelação, heterocedasticidade e normalidade
+
+---
+
+## 📊 Variáveis
+| Variável | Descrição |
+|--------|----------|
+| inad_sfn | Inadimplência – Sistema Financeiro Nacional |
+| inad_sncc | Inadimplência – Sistema Nacional de Crédito Cooperativo |
+| selic | Taxa Selic |
+| ipca | Inflação (IPCA) |
+| ibc_br | Índice de atividade econômica |
+| desemprego | Taxa de desocupação |
+| comprometimento | Comprometimento da renda com juros |
+
+---
 
 ## Como reproduzir
 ### Pré-requisitos
