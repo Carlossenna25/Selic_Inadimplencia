@@ -1,0 +1,21 @@
+# ===== Quarto outputs/cache =====
+*_files/
+_site/
+.quarto/
+.quarto-cache/
+
+# ===== R / RStudio =====
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+
+# ===== renv (se estiver usando) =====
+renv/library/
+renv/staging/
+
+# ===== OS / misc =====
+.DS_Store
+Thumbs.db
+*.log
