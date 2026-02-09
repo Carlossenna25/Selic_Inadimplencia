@@ -1,0 +1,645 @@
+---
+title: "Impacto_Juros_Inadimplencia"
+format: 
+  html:
+    toc: true
+    code-fold: true
+    embed-resources: true
+    page-layout: full
+    dpi: 400
+    fig-asp: 0.618
+    fig-width: 15
+    fig-height: 12
+    fig-align: center
+    df-print: kable
+theme:
+  light: flatly
+  dark: darkly
+execute:
+  eval: true
+  echo: true
+  message: false
+  warning: false
+editor: 
+  markdown: 
+    wrap: sentence
+---
+
+## Sumário executivo
+
+Este relatório estima o impacto de choques na taxa Selic sobre a inadimplência do Sistema Financeiro Nacional (SFN) e do Sistema Nacional de Crédito Cooperativo (SNCC), utilizando dados mensais de março de 2012 até o período mais recente disponível, combinando séries do Sistema Gerenciador de Séries (SGS), do Banco Central, e indicadores coletados do IBGE/SIDRA.
+
+A identificação econométrica é realizada por meio de modelos VAR e funções resposta ao impulso (IRF) com intervalos de confiança obtidos via bootstrap (1.000 repetições).
+Os resultados indicam que um choque contracionista na política monetária eleva a inadimplência com defasagem, em que o SNCC apresenta maior intecidade e pico mais antecipado em comparação ao SFN, requesitando maior monitoramento e atuação preventiva durante ciclos de aperto monetário.
+
+## 1. Contexto econômico e motivação
+
+O ciclo recente de política monetária no Brasil tem sido marcado por movimentos abruptos na taxa Selic, refletindo esforços de controle inflacionário em um ambiente de elevada incerteza macroeconômica.
+A partir de 2013, e de forma mais intensa após 2015, a economia brasileira passou a conviver com períodos prolongados de juros elevados, seguidos por fases de flexibilização e, mais recentemente, por um novo ciclo de aperto monetário iniciado em 2021.
+
+Não obstante, a elevação da taxa básica de juros (Selic) afeta o sistema financeiro de diversas formas e por diversos canais, por meio do encarecimento do crédito, redução da renda disponível das famílias e empresas e o aumento do comprometimento da renda com o serviço da dívida.
+Tais mecanismos tendem a se materializarem, com defasagem, elevando a magnitude da inadimplência das carteiras de crédito, especialmente em segmentos mais sensíveis ao ciclo econômico.
+
+Nesse contexto, o Sistema Nacional de Crédito Cooperativo (SNCC) apresenta características institucionais que justificam uma análise específica e comparativa em relação ao Sistema Financeiro Nacional (SFN).
+Indubidavelmente, as cooperativas de crédito desempenham papel relevante na inclusão financeira e no financiamento de pequenas e médias empresas e de famílias, grupos que ficam mais expostos a choques de renda, inflação e variações nas condições financeiras.
+Além disso, a estrutura de governança, o perfil de associados e a concentração regional do crédito podem ampliar ou antecipar os efeitos de choques macroeconômicos sobre a inadimplência.
+
+Embora a literatura e o acompanhamento conjuntural tratem o comportamento do crédito de forma agregada, evidências recentes sugerem que a transmissão da política monetária não ocorre de maneira homogênea entre diferentes segmentos do sistema financeiro.
+Por conseguinte, compreender se, e em que magnitude, os choques na taxa Selic afetam de forma distinta a inadimplência no SNCC em relação ao SFN é fundamental para o aprimoramento de estratégias de monitoramento de risco, planejamento prudencial e definição de ações preventivas ao longo do ciclo monetário.
+
+Portanto, o presente estudo busca quantificar o impacto dinâmico de choques na taxa Selic sobre inadimplência nos dois sistemas, explorando não apenas a intensidade do efeito, mas também seu timing e persistência.
+A análise fornece subsídios técnicos para tomada de decisão em instituições cooperativas, especialmente no que se refere a antecipação de riscos, mediante as decisões na condução da política monetária.
+
+## 2 Código
+
+Recaregar pacotes e definição de cores:
+
+```{r}
+#| label: load-packages
+#| message: false
+
+library(GetBCBData)
+library(sidrar)
+library(tidyverse)
+library(scales)
+library(quantmod)
+library(tidyr)
+library(dplyr)
+library(forecast)
+library(patchwork)
+library(seasonal)
+library(vars)
+library(lubridate)
+library(scales)
+library(ggplot2)
+library(urca)
+library(zoo)
+library(corrplot)
+library(purrr)
+library(dynlm)
+library(httr2)
+library(readxl)
+library(stringr)
+library(janitor)
+library(vroom)
+
+cores_am <- c(
+  "#282f6b", "#1B998B", "#FF7A00", "#00798C", "#b22200",
+  "#50514F", "#003366", "#eace3f", "#005A9C", "#808080", "#2E294E"
+)
+```
+
+```{r}
+## Seleção de Séries e coleta dos dados ##
+Series_BCB <- c(
+  inadimplencia = 21082,
+  desocupacao = 24369,
+  ibc_Br_sazonal = 24364,
+  ipca = 433,
+  comprometimento_juros = 29033,
+  selic = 4189
+)
+
+Series_IBGE <- list(
+  rendimento = "/t/6387/n1/all/v/5935/p/all",
+  massa_salarial = "/t/6392/n1/all/v/6293/p/all"
+)
+
+GetBCBData::gbcbd_get_series(
+  id = Series_BCB,
+  first.date = "2012-03-01",
+  last.date = Sys.Date()
+) %>%
+  rename(data = ref.date,
+         valor = value,
+         serie = series.name) -> df_bcb
+
+ibge_tratamento <- function(df_raw, nome_serie, tipo_data = "trimestre") {
+  coluna_data <- dplyr::if_else(
+    tipo_data == "trimestre",
+    "Trimestre Móvel (Código)",
+    "Mês (Código)"
+  )
+  
+  df_raw %>%
+    dplyr::select(
+      data = dplyr::all_of(coluna_data),
+      valor = Valor
+    ) %>%
+    dplyr::mutate(
+      data = lubridate::ym(data),
+      valor = as.numeric(valor),
+      serie = nome_serie
+    ) %>%
+    dplyr::filter(data >= as.Date("2012-03-01")) %>%
+    tidyr::drop_na()
+}
+
+ibge_tratamento(
+  get_sidra(api = Series_IBGE$rendimento),
+  "rendimento",
+  "trimestre"
+) -> df_rendimento
+
+ibge_tratamento(
+  get_sidra(api = Series_IBGE$massa_salarial),
+  "massa_salarial",
+  "trimestre"
+) -> df_massa_salarial
+
+## Verificação ##
+dplyr::glimpse(df_rendimento)
+dplyr::count(df_rendimento, serie)
+range(df_rendimento$data)
+
+dplyr::glimpse(df_massa_salarial)
+dplyr::count(df_massa_salarial, serie)
+range(df_massa_salarial$data)
+
+dplyr::bind_rows(
+  df_bcb %>%
+    dplyr::select(-`id.num`),
+  df_massa_salarial, df_rendimento
+) -> base_dados
+
+base_dados %>% 
+  pivot_wider(
+  names_from = serie,
+  values_from = valor
+) %>%
+  arrange(data) -> base_pivotada
+
+## Ajuste sazonal ##
+base_pivotada %>% 
+  dplyr::select(data, desocupacao) %>% 
+  tidyr::drop_na() -> df_desemprego_plot
+
+base_pivotada %>% 
+  dplyr::select(data, rendimento) %>% 
+  tidyr::drop_na() -> df_rendimento_plot
+
+ajustar_sazonalidade <- function(dados, coluna_valor) {
+  serie <- dados[[coluna_valor]]
+  data_inicial <- base::min(dados$data)
+  
+  if (base::length(serie) < 24) {
+    return(dados |> dplyr::mutate(!!base::paste0(coluna_valor, "_ajustado") := serie))
+  }
+  
+  ts_obj <- stats::ts(
+    serie,
+    start = c(lubridate::year(data_inicial), lubridate::month(data_inicial)),
+    frequency = 12
+  )
+  
+  tryCatch({
+    serie_ajustada <- base::as.numeric(seasonal::final(seasonal::seas(ts_obj)))
+    dados |> dplyr::mutate(!!base::paste0(coluna_valor, "_ajustado") := serie_ajustada)
+  }, error = function(e) {
+    dados |> dplyr::mutate(!!base::paste0(coluna_valor, "_ajustado") := serie)
+  })
+}
+
+ajustar_sazonalidade(df_desemprego_plot, "desocupacao") -> df_desemprego_plot
+ajustar_sazonalidade(df_rendimento_plot, "rendimento") -> df_rendimento_plot
+
+base_pivotada %>% 
+  dplyr::left_join(
+    df_desemprego_plot %>%
+      dplyr::select(data, desocupacao_ajustado),
+    by = "data"
+  ) %>% 
+  dplyr::left_join(
+    df_rendimento_plot %>%
+      dplyr::select(data, rendimento_ajustado),
+    by = "data"
+  ) -> base_pivotada
+
+```
+
+```{r}
+## Definição de variáveis dummy e especificações do modelo ##
+base_pivotada %>%
+  dplyr::mutate(
+    recessao_Dilma = dplyr::if_else(
+      data >= as.Date("2015-03-01") & data <= as.Date("2016-12-01"), 1L, 0L),
+    covid = dplyr::if_else(
+      data >= base::as.Date("2020-03-01") & data <= base::as.Date("2021-12-01"), 1L, 0L),
+    desenrola = dplyr::if_else(
+      data >= as.Date("2023-07-01") & data <= as.Date("2024-04-01"), 1L, 0L)
+    ) -> base_modelo
+
+base_modelo %>%
+  mutate(
+    d_inad   = inadimplencia - lag(inadimplencia, 1),
+    d_selic  = selic - lag(selic, 1),
+    g_ibc    = 100 * (log(ibc_Br_sazonal) - log(lag(ibc_Br_sazonal, 1))),
+    d_desocupao = desocupacao_ajustado - lag(desocupacao_ajustado, 1),
+    g_rendimento = 100 * (log(rendimento_ajustado) - log(lag(rendimento_ajustado, 1))),
+    d_comprometimento  = comprometimento_juros - lag(comprometimento_juros, 1),
+  ) %>%
+  dplyr::select(
+    data, d_inad, d_selic, g_ibc, d_desocupao, d_comprometimento,
+    g_rendimento, ipca, recessao_Dilma, covid, desenrola
+  ) %>%
+  tidyr::drop_na() -> df_var
+
+## Teste de estacionariedade ##
+vars_testar <- c("d_inad", "d_selic", "g_ibc", "g_rendimento", "d_desocupao", "d_comprometimento", "ipca")
+
+resultados <- map_dfr(vars_testar, function(v) {
+    x <- df_var[[v]]
+    x <- x[is.finite(x)]
+    
+    adf_p <- tryCatch(adf.test(x)$p.value, error = function(e) NA_real_)
+    
+    kpss_obj <- tryCatch(ur.kpss(x, type = "mu"), error = function(e) NULL)
+    kpss_stat <- if (is.null(kpss_obj)) NA_real_ else kpss_obj@teststat
+    kpss_5pct <- if (is.null(kpss_obj)) NA_real_ else kpss_obj@cval["5pct"]
+    
+    tibble(
+        variavel = v,
+        adf_pvalue = adf_p,
+        kpss_stat = kpss_stat,
+        kpss_crit_5pct = kpss_5pct,
+        kpss_rejeita_estacionariedade_5pct = ifelse(is.na(kpss_stat), NA, kpss_stat > kpss_5pct)
+    )
+})
+
+print(resultados)
+
+### VAR ##
+VARselect(
+  df_var %>% dplyr::select(d_comprometimento, d_selic, d_inad),
+  lag.max = 12,
+  type = "const",
+  exogen = df_var %>% dplyr::select(ipca, recessao_Dilma, covid, desenrola)
+)
+
+VAR(
+  y = df_var %>% dplyr::select(d_comprometimento, d_selic, d_inad),
+  p = 3,
+  type = "const",
+  exogen = df_var %>% dplyr::select(ipca, recessao_Dilma, covid, desenrola)
+) -> v_SNF
+
+vars::irf(
+  v_SNF,
+  impulse = "d_selic",
+  response = "d_inad",
+  n.ahead = 24,
+  boot = TRUE,
+  runs = 1000
+) -> ir_SNF
+
+plot(ir_SNF)
+
+vars::serial.test(v_SNF, lags.pt = 12, type = "PT.asymptotic")
+vars::arch.test(v_SNF, lags.multi = 12)
+vars::normality.test(v_SNF)
+vars::stability(v_SNF, type = "OLS-CUSUM")
+vars::roots(v_SNF)
+
+cbind(
+  h = 0:24,
+  irf = ir_SNF$irf$d_selic[, "d_inad"],
+  lo  = ir_SNF$Lower$d_selic[, "d_inad"],
+  hi  = ir_SNF$Upper$d_selic[, "d_inad"]
+) %>% as.data.frame()
+```
+
+```{r}
+## Planilha única do SCR ##
+vroom(
+  "C:/Users/carlo/OneDrive/Área de Trabalho/Estudos/Crédito/planilha_scr/planilha_202508.csv",
+  delim = ";",
+  col_types = vroom::cols(.default = "c"),
+  col_select = c(data_base, tcb, carteira_inadimplida_arrastada, carteira_ativa, vencido_acima_de_15_dias),
+  progress = TRUE
+) %>% 
+  dplyr::filter(tcb == "Cooperativas") %>%
+  mutate(across(
+    c(carteira_inadimplida_arrastada, vencido_acima_de_15_dias, carteira_ativa),
+    ~ parse_number(.x, locale = locale(decimal_mark = ",", grouping_mark = "."))
+  )) %>%
+  group_by(data_base) %>%
+  summarise(
+    carteira_inadimplida = sum(carteira_inadimplida_arrastada, na.rm = TRUE),
+    vencido_15 = sum(vencido_acima_de_15_dias, na.rm = TRUE),
+    carteira_ativa = sum(carteira_ativa, na.rm = TRUE),
+    inad_15 = vencido_15 / carteira_ativa,
+    inadimplencia_SNCC = (vencido_15 + carteira_inadimplida) / carteira_ativa,
+    .groups = "drop"
+  ) 
+```
+
+```{r}
+## baixar séries SCR ##
+library(DBI)
+
+path_dir <- "C:/Users/carlo/OneDrive/Área de Trabalho/Estudos/Crédito/planilha_scr"
+
+con <- dbConnect(duckdb::duckdb(), dbdir = file.path(path_dir, "scr.duckdb"))
+
+qry <- sprintf("
+WITH base AS (
+  SELECT
+    data_base,
+    tcb,
+    -- converte pt-BR: remove '.' e troca ',' por '.'
+    TRY_CAST(REPLACE(REPLACE(carteira_inadimplida_arrastada, '.', ''), ',', '.') AS DOUBLE) AS carteira_inadimplida_arrastada,
+    TRY_CAST(REPLACE(REPLACE(vencido_acima_de_15_dias, '.', ''), ',', '.') AS DOUBLE) AS vencido_acima_de_15_dias,
+    TRY_CAST(REPLACE(REPLACE(carteira_ativa, '.', ''), ',', '.') AS DOUBLE) AS carteira_ativa
+  FROM read_csv_auto('%s/planilha_*.csv', delim=';', header=true, union_by_name=true)
+  WHERE tcb = 'Cooperativas'
+)
+SELECT
+  data_base,
+  SUM(carteira_inadimplida_arrastada) AS carteira_inadimplida,
+  SUM(vencido_acima_de_15_dias)       AS vencido_15,
+  SUM(carteira_ativa)                AS carteira_ativa,
+  CASE WHEN SUM(carteira_ativa) > 0 THEN SUM(vencido_acima_de_15_dias) / SUM(carteira_ativa) END AS inad_15,
+  CASE WHEN SUM(carteira_ativa) > 0 THEN (SUM(vencido_acima_de_15_dias) + SUM(carteira_inadimplida_arrastada)) / SUM(carteira_ativa) END AS inadimplencia_SNCC
+FROM base
+GROUP BY data_base
+ORDER BY data_base
+", gsub("\\\\", "/", path_dir))
+
+out <- dbGetQuery(con, qry)
+
+dbDisconnect(con, shutdown = TRUE)
+
+out <- as_tibble(out)
+out
+```
+
+```{r}
+## Especiação do modelo para SNCC ##
+base_pivotada %>%
+    mutate(
+        competencia = str_sub(as.character(data), 1, 7)
+    ) %>%
+    left_join(
+        out %>%
+            transmute(
+                competencia = str_sub(as.character(data_base), 1, 7),
+                inadimplencia_SNCC = inadimplencia_SNCC * 100
+            ),
+        by = "competencia"
+    ) -> base_sncc
+  
+base_sncc %>%   
+    dplyr::mutate(
+    recessao_Dilma = dplyr::if_else(
+      data >= as.Date("2015-03-01") & data <= as.Date("2016-12-01"), 1L, 0L),
+    covid = dplyr::if_else(
+      data >= base::as.Date("2020-03-01") & data <= base::as.Date("2021-12-01"), 1L, 0L),
+    desenrola = dplyr::if_else(
+      data >= as.Date("2023-07-01") & data <= as.Date("2024-04-01"), 1L, 0L)
+    ) -> base_final
+
+base_final %>%
+  mutate(
+    d_inad_SNCC = inadimplencia_SNCC - lag(inadimplencia_SNCC, 1),
+    d_selic     = selic - lag(selic, 1),
+    d_comprometimento = comprometimento_juros - lag(comprometimento_juros, 1),
+    g_ibc    = 100 * (log(ibc_Br_sazonal) - log(lag(ibc_Br_sazonal, 1))),
+    d_desocupao = desocupacao_ajustado - lag(desocupacao_ajustado, 1),
+    g_rendimento = 100 * (log(rendimento_ajustado) - log(lag(rendimento_ajustado, 1))),
+  ) %>%
+  dplyr::select(
+    data, d_inad_SNCC, d_selic, g_ibc, d_desocupao, d_comprometimento,
+    g_rendimento, ipca, recessao_Dilma, covid, desenrola
+  ) %>%
+  tidyr::drop_na() -> df_var_sncc
+
+## VAR SNCC ##
+VARselect(
+  df_var_sncc %>% dplyr::select(d_comprometimento, d_selic, d_inad_SNCC),
+  lag.max = 12,
+  type = "const",
+  exogen = df_var_sncc %>% dplyr::select(ipca, recessao_Dilma, covid, desenrola)
+)
+
+VAR(
+  y = df_var_sncc %>% dplyr::select(d_comprometimento, d_selic, d_inad_SNCC),
+  p = 6,
+  type = "const",
+  exogen = df_var_sncc %>% dplyr::select(recessao_Dilma, covid, desenrola)
+) -> v_SNCC
+
+vars::irf(
+  v_SNCC,
+  impulse = "d_selic",
+  response = "d_inad_SNCC",
+  n.ahead = 24,
+  boot = TRUE,
+  runs = 1000
+) -> ir_SNCC
+
+plot(ir_SNCC)
+
+vars::serial.test(v_SNCC, lags.pt = 12, type = "PT.asymptotic")
+vars::arch.test(v_SNCC, lags.multi = 12)
+vars::normality.test(v_SNCC)
+vars::stability(v_SNCC, type = "OLS-CUSUM")
+vars::roots(v_SNCC)
+
+cbind(
+  h = 0:24,
+  irf = ir_SNCC$irf$d_selic[, "d_inad_SNCC"],
+  lo  = ir_SNCC$Lower$d_selic[, "d_inad_SNCC"],
+  hi  = ir_SNCC$Upper$d_selic[, "d_inad_SNCC"]
+) %>% as.data.frame()
+```
+
+```{r}
+## GRÁFICOS 
+irf_to_df <- function(ir_obj, impulse, response) {
+  tibble(
+    h   = 0:(length(ir_obj$irf[[impulse]][, response]) - 1),
+    irf = as.numeric(ir_obj$irf[[impulse]][, response]),
+    lo  = as.numeric(ir_obj$Lower[[impulse]][, response]),
+    hi  = as.numeric(ir_obj$Upper[[impulse]][, response])
+  )
+}
+
+df_plot_snf <- irf_to_df(ir_SNF, impulse = "d_selic", response = "d_inad") %>%
+  mutate(sistema = "SNF")
+
+g1 <- ggplot(df_plot_snf, aes(x = h, y = irf)) +
+  geom_hline(yintercept = 0, linewidth = 0.5) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2) +
+  geom_line(linewidth = 1, color = "#1f77b4") +
+  labs(
+    title = "Impacto de um choque na Selic sobre a inadimplência – SNF",
+    subtitle = "Intervalos de confiança de 95% via bootstrap (1.000 repetições)",
+    x = "Horizonte (meses)",
+    y = "Resposta (p.p.)",
+    caption = "Fonte: Elaboração própria."
+  ) +
+  theme_minimal(base_size = 12)
+
+g1
+
+df_plot_sncc <- irf_to_df(ir_SNCC, impulse = "d_selic", response = "d_inad_SNCC") %>%
+  mutate(sistema = "SNCC")
+
+g2 <- ggplot(df_plot_sncc, aes(x = h, y = irf)) +
+  geom_hline(yintercept = 0, linewidth = 0.5) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.2) +
+  geom_line(linewidth = 1, color = "#d62728") +
+  labs(
+    title = "Impacto de um choque na Selic sobre a inadimplência – SNCC",
+    subtitle = "Intervalos de confiança 95% via bootstrap (1.000 repetições)",
+    x = "Horizonte (meses)",
+    y = "Resposta (p.p.)",
+    caption = "Fonte: Elaboração própria."
+  ) +
+  theme_minimal(base_size = 12)
+
+g2
+
+df_cmp <- bind_rows(
+  irf_to_df(ir_SNF,  impulse = "d_selic", response = "d_inad")      %>% mutate(sistema = "SNF"),
+  irf_to_df(ir_SNCC, impulse = "d_selic", response = "d_inad_SNCC") %>% mutate(sistema = "SNCC")
+)
+
+df_cmp <- bind_rows(
+  irf_to_df(ir_SNF,  impulse = "d_selic", response = "d_inad") %>%
+    mutate(sistema = "SNF"),
+  irf_to_df(ir_SNCC, impulse = "d_selic", response = "d_inad_SNCC") %>%
+    mutate(sistema = "SNCC")
+)
+
+g_comp <- ggplot(
+  df_cmp,
+  aes(x = h, y = irf, color = sistema)
+) +
+  geom_hline(yintercept = 0, linewidth = 0.5) +
+  geom_line(linewidth = 1.1) +
+  scale_color_manual(
+    values = c(
+      "SNF"  = "#1f77b4",  
+      "SNCC" = "#d62728"  
+    ),
+    name = "Sistema"
+  ) +
+  labs(
+    title = "Impacto de um choque na Selic sobre a inadimplência",
+    subtitle = "Comparação entre o SNF e o SNCC",
+    x = "Horizonte (meses)",
+    y = "Resposta da inadimplência (p.p.)",
+    caption = "Fonte: Elaboração Própria. "
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(size = 11),
+    legend.text  = element_text(size = 10)
+  )
+
+g_comp
+
+df_cmp_band <- bind_rows(
+  irf_to_df(ir_SNF,  impulse = "d_selic", response = "d_inad")      %>% mutate(sistema = "SNF"),
+  irf_to_df(ir_SNCC, impulse = "d_selic", response = "d_inad_SNCC") %>% mutate(sistema = "SNCC")
+)
+
+g4 <- ggplot(df_cmp_band, aes(x = h, y = irf, group = sistema)) +
+  geom_hline(yintercept = 0) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.12) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Impacto da Selic sobre a inadimplência: SNF vs SNCC",
+    subtitle = "Intervalos 95% via bootstrap (1.000 repetições)",
+    x = "Horizonte (meses)",
+    y = "Resposta (p.p.)"
+  ) +
+  theme_minimal(base_size = 12)
+
+g4
+```
+
+```{r}
+base_final %>%
+  dplyr::select(
+    data,
+    inadimplencia_SFN  = inadimplencia,
+    inadimplencia_SNCC,
+    selic
+  ) %>%
+  pivot_longer(
+    cols = -data,
+    names_to = "serie",
+    values_to = "valor"
+  ) %>%
+  ggplot(aes(x = data, y = valor, color = serie)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(
+    values = c(
+      inadimplencia_SFN  = "#1f77b4",  
+      inadimplencia_SNCC = "#d62728",  
+      selic              = "black"
+    ),
+    labels = c(
+      "Inadimplência SFN (%)",
+      "Inadimplência SNCC (%)",
+      "Selic (%)"
+    )
+  ) +
+  scale_y_continuous(labels = percent_format(scale = 1)) +
+  labs(
+    title = "Evolução da inadimplência e da taxa Selic",
+    subtitle = "Sistema Financeiro Nacional e Cooperativas de Crédito",
+    x = NULL,
+    y = "Percentual",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+
+fevd_SNCC <- fevd(v_SNCC, n.ahead = 24)
+
+fevd_df <- fevd_SNCC$d_inad_SNCC %>%
+  as.data.frame() %>%
+  mutate(horizonte = 1:n()) %>%
+  pivot_longer(
+    cols = -horizonte,
+    names_to = "choque",
+    values_to = "contribuicao"
+  )
+
+fevd_df %>%
+  filter(choque %in% c("d_selic", "d_comprometimento", "d_inad_SNCC")) %>%
+  ggplot(aes(x = horizonte, y = contribuicao, fill = choque)) +
+  geom_area(alpha = 0.85) +
+  scale_fill_manual(
+    values = c(
+      d_selic = "#d62728",
+      d_comprometimento = "#ff9896",
+      d_inad_SNCC = "#7f7f7f"
+    ),
+    labels = c(
+      "Choque de Selic",
+      "Comprometimento de renda",
+      "Choque próprio da inadimplência"
+    )
+  ) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  labs(
+    title = "Decomposição da variância da inadimplência nas cooperativas",
+    subtitle = "Importância relativa dos choques ao longo do tempo",
+    x = "Horizonte (meses)",
+    y = "Participação na variância (%)",
+    fill = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+```
